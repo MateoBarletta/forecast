@@ -24,6 +24,11 @@ fit.arima <- auto.arima(train)
 summary(fit.arima)
 checkresiduals(fit.arima)
 
+#Test de autocorrelacion de los errores:
+res <- residuals(fit.arima)
+Box.test(res, lag=12, fitdf=3, type="Box-Pierce")
+Box.test(res, lag=12, fitdf=3, type="Ljung-Box")
+
 #Estimamos un ETS
 fit.ets <- ets(train)
 summary(fit.ets)

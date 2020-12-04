@@ -1,0 +1,122 @@
+---
+title: "1- Procesos Univariados"
+author: "Mateo Barletta - Diego Varela"
+date: "4/12/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+
+
+library(dplyr)
+library(ggplot2)
+library(readxl)
+library(forecast)
+library(janitor)
+
+theme_set(
+  theme_minimal() +
+    theme(legend.position = "right")
+  )
+
+cbp1 <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+```
+
+## Motivación
+
+En este documento nos proponemos predecir el indice de precios al consumidor para Estados Unidos aplicando dos modelos univariados, ARIMA y ETS. Se cuenta con la base de datos utilizada en el paper *"Global Inflation"* de Matteo Ciccarelli y Benoît Mojon. Esta base cuenta con información para 22 países sobre tres variables: el indice de precios al consumidor (IPC), un indice de producción industrial (IP) y la cantidad nominal de dinero (M3). Además cuenta con un indice de precios internacionales de commodities.
+
+En esta primera instancia buscaremos predecir el IPC para Estados Unidos, utilizando modelos univariantes, es decir solo con la información de la propia variable. Comenzamos cargando la base y filtrando la información para Estados Unidos:
+
+```{r}
+# Cargo toda la base y le limpio los nombres a las columnas
+df_forecast <- read_excel("data/forecast_DATA.xlsx") %>% 
+  clean_names()
+
+# Selecciono solo los datos de USA 
+df_usa <- df_forecast %>% 
+  select(date, ends_with("us"), comprice)
+
+# Serie del ipc usa
+ipc_usa <- ts(df_usa$cpiqus, start = c(1960,1), frequency = 4)
+```
+
+Se cuenta con información cuatrimestral desde 1960Q1 a 2008Q2, es decir 194 observaciones. A continuación se grafica la variable de interés medida en niveles:
+
+```{r, echo=FALSE}
+plot.ts(ipc_usa, main = "Indice de Precios al Consumidor de Estados Unidos")
+```
+La gráfica presenta una clara tendencia creciente, por lo que será necesario realizar alguna transformación sobre la variable para estacionalizarla. Para intentar modelizar la serie partiremos el dataser en un subset de entrenamiento (las primeras 164 observaciones) y otro de testeo (las últimas 30 observaciones. 
+
+
+```{r}
+# Parto la base en train (5/6) y test (1/6)
+train <- window(ipc_usa, end = c(2000,4))
+test  <- window(ipc_usa, start = c(2001,1))
+```
+
+## Modelo ARIMA
+
+El primer modelo a estimar es un **ARIMA**, este es una combinación de un modelo autoregrresivo **AR(p)** y un proceso de media móvil **MA(q)**. Buscamos la especificación del ARIMA que minimice los criterios de información:
+
+```{r}
+fit.arima <- auto.arima(train)
+summary(fit.arima)
+```
+
+Es necesario diferenciar dos veces la serie para estacionalizarla, luego el modelo el modelo que mejor ajusta es un MA(3), por lo que obtenemos un ARIMA(0,2,3). Chequeamos los residuos del modelo:
+```{r, echo=FALSE}
+checkresiduals(fit.arima)
+```
+
+La varianza de los residuos no parece ser constante, a partir de la década del 80 vemos un aumento en la dispersión de los mismos. El correlograma no muestra rezagos significativos, más allá de que el 10º *Lag* sea significativo. La distribución de los residuos no parece ser normal por lo que realizamos el test de Ljung-Box:
+
+```{r}
+res <- residuals(fit.arima)
+
+Box.test(res, lag=12, fitdf=3, type="Box-Pierce")
+Box.test(res, lag=12, fitdf=3, type="Ljung-Box")
+```
+
+No rechazamos la hipótesis nula de no autocorrelación en los errores.
+
+
+## Modelo ETS
+
+El segundo modelo que estimaremos es un modelo *Error, Trend, Seasonal (ETS)*, que descompone la serie en un componente de nivel, uno del nivel de la serie y otro de tendencia.
+
+```{r}
+fit.ets <- ets(train)
+summary(fit.ets)
+```
+
+Obtenemos errores multiplicativos(M), un nivel de la serie aditiva (A) y una tendencia nula (N), luego chequeamos los residuos:
+
+```{r}
+checkresiduals(fit.ets)
+```
+
+Vemos autocorrelación en los residus, aunque muestran una varianza más hompgénea.
+
+## Forecast y comparación de modelos
+
+Con los modelos estimados realizamos los pronósticos para el set de testing, luego comparamos los errores siguiendo varios criterios:
+
+```{r}
+fcst.arima <- forecast(fit.arima, h = length(test))
+fcst.ets   <- forecast(fit.ets,   h = length(test))
+
+accuracy(fcst.arima$mean, test)
+accuracy(fcst.ets$mean, test)
+```
+
+
+Vemos que para cualquier criterio, los errores son menores (en valor absoluto) para el modelo ETS. Por lo que lo utilizaremos para hacer el pronóstico.
+
+```{r,echo=FALSE}
+autoplot(fcst.ets) + autolayer(test) + ylab("IPC") 
+```
+
