@@ -1,4 +1,4 @@
-library(dplyr)
+library(tidyverse)
 library(readxl)
 library(forecast)
 library(janitor)
@@ -9,13 +9,11 @@ df_forecast <- read_excel("data/forecast_DATA.xlsx") %>%
 
 # Selecciono solo los datos de USA 
 df_usa <- df_forecast %>% 
-  select(date, ends_with("us"), comprice)
+  dplyr::select(date, ends_with("us"), comprice)
 
 # Serie del ipc usa
 ipc_usa <- ts(df_usa$cpiqus, start = c(1960,1), frequency = 4)
-plot.ts(ipc_usa, main = "Indice de Precios al Consumidor de Estados Unidos")
-
-infla_usa <- diff(log(ipc_usa), lag = 4)
+plot.ts(ipc_usa, main = "Indice de Precios al Consumidor de Estados Unidos", xlab="Período", ylab="IPC USA")
 
 # Estimo ARIMA para la serie en niveles
 # Parto la base en train (5/6) y test (1/6)
@@ -62,7 +60,7 @@ checkresiduals(fit.arima.diff)
 
 #Generamos los pronósticos rolling para h=1:
 fcst.arima <- matrix(0, nrow = 25, ncol = 1)  
-fcst.arima <- ts(fcst.var, start=c(2001,1), frequency = 4)
+fcst.arima <- ts(fcst.arima, start=c(2001,1), frequency = 4)
 
 for(i in 1:25){
   train <- window(infla_usa, end = 2001 + (i-1)/4)
@@ -70,8 +68,16 @@ for(i in 1:25){
   fcst.arima[i,] <- forecast(arima, h=1)$mean
 }
 
+# Partimos la muestra para evaluar
+#out.of.sample: 1° trimestre 2000 - 2° trimestre 2007 (T=164) en niveles
+out.of.sample <- cbind(log(ipc_usa[161:190]))
+out.of.sample <- ts(out.of.sample, start = c(2000,1), frequency = 4)
+test.dlog.ipc <- diff(out.of.sample, lag = 4)[,1]
+
+
 # Comparo con el out of sample
-dlogs.test <- diff(out.of.sample, lag = 4)[,1]
 par(mfrow=c(1,2), oma=c(0.5,0.5,0.5,0.5), mar=c(2,2,2,2))
-plot(dlogs.test, main="Inflación USA", ylab = "", xlab = "")
-plot(fcst.var, col = "grey", lwd = 2, main="Forecast ARIMA", ylab = "", xlab = "")
+plot(test.dlog.ipc, main="Inflación USA", xlab = "Período", ylab = "IPC USA", ylim=c(0, 0.040))
+plot(fcst.arima, col = "grey", lwd = 2, main="Forecast ARIMA", xlab = "Período", ylab = "IPC USA", ylim=c(0, 0.040))
+
+rm(i, res, test, train, arima)

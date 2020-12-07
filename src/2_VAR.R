@@ -81,8 +81,8 @@ din.sample <- diff(in.sample, lag = 4)
 VARselect(din.sample, lag.max = 13, type = "const")
 
 # Estimo el modelo VAR(6)
-in_var <- VAR(din.sample, p = 6, type = "const")
-serial.test(in_var, lags.pt = 13) # No rechazo no autocorrelacion en los errores.
+fit.var <- VAR(din.sample, p = 6, type = "const")
+serial.test(fit.var, lags.pt = 13) # No rechazo no autocorrelacion en los errores.
 
 # Actualizamos recursivamente los parametros del VAR(3)
 #Pronostico para h=1 la difencia logaritmica de serie IPC (inflacion) VAR1
@@ -96,7 +96,9 @@ for(i in 1:25){
 }
 
 # Comparo con el out of sample
-dlogs.test <- diff(out.of.sample, lag = 4)[,1]
+test.dlog.ipc <- diff(out.of.sample, lag = 4)[,1]
 par(mfrow=c(1,2), oma=c(0.5,0.5,0.5,0.5), mar=c(2,2,2,2))
-plot(dlogs.test, main="Inflación USA", ylab = "", xlab = "")
-plot(fcst.var, col = "blue", lwd = 2, main="Forecast VAR(6)", ylab = "", xlab = "")
+plot(test.dlog.ipc , main="Inflación USA", xlab = "Período", ylab = "IPC USA", ylim=c(0, 0.040))
+plot(fcst.var, col = "blue", lwd = 2, main="Forecast VAR(6)", xlab = "Período", ylab = "IPC USA", ylim=c(0, 0.040))
+
+rm(i, train, var)

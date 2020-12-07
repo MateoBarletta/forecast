@@ -50,20 +50,19 @@ series_completas <- cbind(diff(log(ipc_usa), lag = 4),
                           diff(log(com),     lag = 4),
                           diff(log(m3_usa),  lag = 4))
 
-series_completas <- ts(series_completas, start = c(1961,2), frequency = 4)
 colnames(series_completas) <- c("dlog.ipc", "dlog.ipq","dlog.como","dlog.m2")
 
 #Calculo componentes principales
-pr.out <- prcomp(infla_total, scale =TRUE)
+fit.pr <- prcomp(infla_total, scale =TRUE)
 # PC  <- scale(infla_total)%*%eigen(cor(infla_total))$vectors
 # PC1 <- ts(PC[,1], start = c(1961,1), frequency = 4)
 
 #Verifico si esta bien calcualdo
-colSums(pr.out$rotation^2)
-zapsmall(cor(pr.out$x))
+colSums(fit.pr$rotation^2)
+zapsmall(cor(fit.pr$x))
 
 # Calculo proporcion de la varianza total explicada por cada componente
-prop_varianza <- pr.out$sdev^2 / sum(pr.out$sdev^2)
+prop_varianza <- fit.pr$sdev^2 / sum(fit.pr$sdev^2)
 
 # grafico varianza explicada por cada pc
 ggplot(data = data.frame(prop_varianza, pc = 1:22),
@@ -75,11 +74,11 @@ ggplot(data = data.frame(prop_varianza, pc = 1:22),
        y = "Prop. de varianza explicada")
 
 # Elijo el primer componente que explica casi el 75% de la varianza
-PC1 <- pr.out$x[,1]
+PC1 <- fit.pr$x[,1]
 PC1 <- ts(PC1, start = c(1961,2), frequency = 4)
 
 #Grafico primer componente
-plot(PC1, main="Primer componente principal", ylab="Inflación interanual", xlab="Período")
+plot(PC1, main="Primer componente principal",  xlab="Período", ylab="Inflación interanual")
 
 # Junto series y primer componente 
 series_favar <- cbind(series_completas, PC1)
@@ -92,12 +91,12 @@ series_favar <- ts(series_favar, start = c(1961,2), frequency = 4)
 VARselect(series_favar, type = "const")
 
 # Estimo con 2 lags por parsimonia
-favar <- VAR(series_favar, lag.max = 2, type = "const")
+fit.favar <- VAR(series_favar, lag.max = 2, type = "const")
 
 # Test multivariado (de tipo Portmanteau) de autocorrelación
-serial.test(favar, lags.pt = 13) #Rechazo H0, hay autocorrelacion en los errores
+serial.test(fit.favar, lags.pt = 13) #Rechazo H0, hay autocorrelacion en los errores
 # Test de Jarque-Bera de normalidad en los errores
-normality.test(favar, multivariate.only = TRUE) # Rechazo H0, no hay normalidad en los errores
+normality.test(fit.favar, multivariate.only = TRUE) # Rechazo H0, no hay normalidad en los errores
 
 # Armo forecast para h=1 rolling out of sample
 fcst.favar <- matrix(0, nrow = 25, ncol = 1)  
@@ -118,9 +117,29 @@ out.of.sample <- cbind(log(ipc_usa[161:190]),
 out.of.sample <- ts(out.of.sample, start = c(2000,1), frequency = 4)
 
 # OUT OF SAMPLE: desde 2001Q1 en diferencias
-dlogs.test <- diff(out.of.sample, lag = 4)[,1]
+test.dlog.ipc <- diff(out.of.sample, lag = 4)[,1]
 
 # Comparo con el out of sample
 par(mfrow=c(1,2), oma=c(0.5,0.5,0.5,0.5), mar=c(2,2,2,2))
-plot(dlogs.test, main="Inflacion", ylab = "", xlab = "")
-plot(fcst.favar, col = "red", lwd = 2, main="Forecast FAVAR(2)", ylab = "", xlab = "")
+plot(test.dlog.ipc, main="Inflacion USA", xlab = "Período", ylab = "IPC USA", ylim=c(0, 0.045))
+plot(fcst.favar, col = "red", lwd = 2, main="Forecast FAVAR(2)", xlab = "Período", ylab = "IPC USA", ylim=c(0, 0.045))
+
+
+# Modelo FAR, AR(1) con componentes principales
+fit.far <- lm(data=series_favar, dlog.ipc ~ lag(dlog.ipc) + PC1)
+
+# Armo pronósticos rolling h=1
+fcst.far <- matrix(0, nrow = 25, ncol = 1)  
+fcst.far <- ts(fcst.far, start=c(2001,1), frequency = 4)
+
+for(i in 1:25){
+  train <- window(series_favar, end = 2001 + (i-1)/4)
+  far <- lm(data=train, dlog.ipc ~ lag(dlog.ipc) + PC1)
+  fcst.far[i,] <- far$coefficients[1]+far$coefficients[2]*train[nrow(train),"dlog.ipc"]+far$coefficients[3]*train[nrow(train),"PC1"]
+}
+
+par(mfrow=c(1,2), oma=c(0.5,0.5,0.5,0.5), mar=c(2,2,2,2))
+plot(test.dlog.ipc, main="Inflacion USA", xlab = "Período", ylab = "IPC USA", ylim=c(0, 0.045))
+plot(fcst.far, col = "green", lwd = 2, main="Forecast FAR(1)", xlab = "Período", ylab = "IPC USA", ylim=c(0, 0.045))
+
+rm(i, lista, train, favar, far)
