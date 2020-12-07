@@ -15,6 +15,9 @@ df_usa <- df_forecast %>%
 ipc_usa <- ts(df_usa$cpiqus, start = c(1960,1), frequency = 4)
 plot.ts(ipc_usa, main = "Indice de Precios al Consumidor de Estados Unidos")
 
+infla_usa <- diff(log(ipc_usa), lag = 4)
+
+# Estimo ARIMA para la serie en niveles
 # Parto la base en train (5/6) y test (1/6)
 train <- window(ipc_usa, end = c(2000,4))
 test  <- window(ipc_usa, start = c(2001,1))
@@ -43,3 +46,32 @@ autoplot(fcst.ets)
 #Evaluamos el desempeño:
 accuracy(fcst.arima$mean, test)
 accuracy(fcst.ets$mean, test)
+
+
+# Ahora voy a estimar un ARIMA para la serie en diferencias
+infla_usa <- diff(log(ipc_usa), lag = 4)
+
+# DF `de prueba y entrenamiento`
+train <- window(infla_usa, end = c(2000,4))
+test  <- window(infla_usa, start = c(2001,1))
+
+#Estimamos un ARIMA
+fit.arima.diff <- auto.arima(train)
+summary(fit.arima.diff)
+checkresiduals(fit.arima.diff)
+
+#Generamos los pronósticos rolling para h=1:
+fcst.arima <- matrix(0, nrow = 25, ncol = 1)  
+fcst.arima <- ts(fcst.var, start=c(2001,1), frequency = 4)
+
+for(i in 1:25){
+  train <- window(infla_usa, end = 2001 + (i-1)/4)
+  arima <- auto.arima(train)
+  fcst.arima[i,] <- forecast(arima, h=1)$mean
+}
+
+# Comparo con el out of sample
+dlogs.test <- diff(out.of.sample, lag = 4)[,1]
+par(mfrow=c(1,2), oma=c(0.5,0.5,0.5,0.5), mar=c(2,2,2,2))
+plot(dlogs.test, main="Inflación USA", ylab = "", xlab = "")
+plot(fcst.var, col = "grey", lwd = 2, main="Forecast ARIMA", ylab = "", xlab = "")
