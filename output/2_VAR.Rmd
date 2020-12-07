@@ -1,0 +1,205 @@
+---
+title: "2- Procesos Multivariados"
+author: "Mateo Barletta - Diego Varela"
+date: "4/12/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+
+library(tidyverse)
+library(readxl)
+library(forecast)
+library(janitor)
+library(vars)
+
+
+theme_set(
+  theme_minimal() +
+    theme(legend.position = "right")
+  )
+
+cbp1 <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+```
+
+En segundo lugar, se procede a estimar un modelo VAR para pronosticar el IPC de USA. Se toman en cuenta para la estimación las demás variables que conforman en el dataset. Es decir, se utilizan el índice de producción y la cantidad de dinero (M3).
+
+De misma forma que el IPC, todas las series tienen un patron de crecimiento que hacen que no sean estacionarias en media. Por tal razon, se estima un VAR en diferencias.
+
+```{r}
+# Cargo toda la base y le limpio los nombres a las columnas
+df_forecast <- read_excel("data/forecast_DATA.xlsx") %>% 
+  clean_names()
+
+# Selecciono solo los datos de USA 
+df_usa <- df_forecast %>% 
+dplyr::select(date, ends_with("us"), comprice)
+
+#Proceso las series para sacar valores missing y queden todas de igual magnitud. Asimismo, se transformas a ts
+# Serie del ipc usa
+ipc_usa <- df_usa$cpiqus[c(-1,-191,-192,-193,-194)]
+ipc_usa <- ts(ipc_usa, start = c(1960,2), frequency = 4)
+# Serie del ipq usa
+ipq_usa <- df_usa$ipqus[c(-1,-191,-192,-193,-194)]
+ipq_usa <- ts(ipq_usa, start = c(1960,2), frequency = 4)
+# Serie de m3 usa
+m3_usa <- df_usa$m3qus[c(-1,-191,-192,-193,-194)]
+m3_usa <- ts(m3_usa, start = c(1960,2), frequency = 4)
+# Serie de commodities usa
+com <- df_usa$comprice [c(-1,-191,-192,-193,-194)]
+com <- ts(com, start = c(1960,2), frequency = 4)
+
+#series_completas <- cbind(log(ipc_usa),log(ipq_usa),log(com),log(m3_usa))
+
+#hago log y diferencio para cada serie 
+series_completas <- cbind(diff(log(ipc_usa),lag = 4),diff(log(ipq_usa),lag = 4),diff(log(com),lag = 4),diff(log(m3_usa),lag=4))
+
+colnames(series_completas) <- c("dlog.ipc", "dlog.ipq","dlog.como","dlog.m2")
+
+```
+
+
+```{r}
+##Grafico de todas jutnas quizas(opcional)########
+
+```
+
+
+```{r}
+#Elijo el mejor modelo en función de los criterios de información
+VARselect(series_completas, type = "const") 
+
+#Estimo modelo
+var1 <- VAR(series_completas, lag.max = 9, type = "const")
+serial.test(var1, lags.pt = 13) #test multivariado (de tipo Portmanteau) de autocorrelación
+normality.test(var1,multivariate.only = TRUE)
+```
+
+Dos criterios coinciden con estimar VAR con 9 rezagos. No obstante, siguiendo la recomendación de elegir modelos  parsimoniosos y considerando que según SC los rezagos deben ser 2, se elige dicho número.
+
+Complementariamente, se realizaron los test de normalidad y de autocorrelación de los residuos pero en ambos casos se rechaza la hipótesis nula. 
+
+Se estimaron modelos VAR con distintos rezagos pero la conclusión es la misma. Esto sugiere que el modelo esta mal especificado, por tal razón se decide sacar variables.
+
+
+```{r}
+#pruebo con distintas combinaciones
+series_completas2 <- cbind(diff(log(ipc_usa),lag = 4), diff(log(ipq_usa),lag=4),diff(log(com),lag=4))
+
+VARselect(series_completas2, type = "const") 
+
+var2 <- VAR(series_completas, lag.max = 10, type = "const")
+serial.test(var2, lags.pt = 13) #test multivariado (de tipo Portmanteau) de autocorrelación
+normality.test(var2,multivariate.only = TRUE)
+
+```
+
+Se probaron distitnas combinaciones de variables con diferente número de rezagos pero en todos los casos se mantiene el problema observado, se rechaza las hipótesis de no autocorrelación y normalidad.
+
+A pesar de esto, se sigue con el procedimiento de estimación para pronosticar.
+
+```{r}
+#no tomar en cuenta estas separaciones
+#In-sample: 2° trimestre 1960 - 4° trimestre 2000 (T=164)
+in.sample <- cbind(log(ipc_usa[2:164]), log(ipq_usa[2:164]),log(com[2:164]),log(m3_usa[2:164]))
+colnames(in.sample) <- c("dlog.ipc", "dlog.ipq.","dlog.como","dlog.m3")
+in.sample <- ts(in.sample, start = c(1960,2), frequency = 4)
+length(in.sample[,1])
+
+
+#out.of.sample: 1° trimestre 2000 - 2° trimestre 2007 (T=164)
+out.of.sample <- cbind(log(ipc_usa[165:190]), log(ipq_usa[165:190]),log(com[165:190]),log(m3_usa[165:190]))
+colnames(out.of.sample) <- c("dlog.ipc", "dlog.ipq.","dlog.como","dlog.m3")
+out.of.sample <- ts(out.of.sample, start = c(2001,1), frequency = 4)
+length(out.of.sample[,1])
+
+## MODELO VAR (en diferencias) 
+#Estimo un VAR en diferencias para el periodo in-sample
+
+din.sample <- diff(in.sample, lag=4)
+VARselect(din.sample, lag.max = 13, type = "const")
+var3 <- VAR(din.sample, p = 3, type = "const")
+summary(var3)
+serial.test(var3, lags.pt = 13) 
+
+#Actualizamos recursivamente los parametros del VAR /aca esta el problema
+#Pronostico para h=1 la difencia logaritmica de serie IPC (inflacion)
+fcst.var <- matrix(0, nrow = 25, ncol = 1)  
+fcst.var <- ts(fcst.var, start=c(2001.25,1), frequency = 4)
+for(i in 1:25){
+  train <- window(series_completas, end = 2001 + (i-1)/4)
+  var <- VAR(train, p = 3, type = "const")
+  fcst.var[i,] <- forecast(var, h=1)$forecast$s$mean
+}
+
+
+```
+
+
+
+
+```{r}
+#Componentes principales
+
+
+lista <- c("cpiqus","cpiqca","cpiquk","cpiqjp","cpiqde","cpiqfr","cpiqit","cpiqat","cpiqbe","cpiqdk","cpiqfi","cpiqgr","cpiqie","cpiqlu","cpiqpt",   "cpiqes","cpiqse","cpiqnl","cpiqau","cpiqnz","cpiqno","cpiqch")
+
+#Selecciono IPC de cada país
+infla_total <- df_forecast %>% dplyr::select(one_of(lista))
+
+#Transformo a ts
+infla_total <- ts(infla_total, start = c(1960,1), frequency = 4)
+infla_total <- diff(log(infla_total),lag=4)
+
+#Corrijo NA
+#infla_total <- tail(infla_total, -1)
+#infla_total <- head(infla_total, -4)
+
+
+
+#Calculo componentes
+pr.out <- prcomp(infla_total, scale =TRUE)
+
+#Verifico si esta bien calcualdo
+colSums(pr.out$rotation^2)
+zapsmall(cor(pr.out$x))
+
+PC <- scale(infla_total)%*%eigen(cor(infla_total))$vectors
+pr.out$x
+
+#Grafico primer componente
+PC1 <- ts(PC[,1], start = c(1960,2), frequency = 4)
+plot(PC1, main="Primer componente principal", ylab="", xlab="")
+
+#chequeo que me da 1 la suma de las proporciones
+prop_varianza <- pr.out$sdev^2 / sum(pr.out$sdev^2) 
+sum(prop_varianza) 
+
+#grafico varianza explicada por cada pc
+ggplot(data = data.frame(prop_varianza, pc = 1:22),
+       aes(x = pc, y = prop_varianza)) +
+  geom_col(width = 0.3) +
+  scale_y_continuous(limits = c(0,1)) +
+  theme_bw() +
+  labs(x = "Componente principal",
+       y = "Prop. de varianza explicada")
+
+#comparo ipc USA con primer componente
+dlog.ipc <- diff(log(df_usa$cpiqus),lag=4)
+dlog.ipc <-ts(dlog.ipc, start = c(1960,1), frequency = 4)
+
+
+#comparo graficas, no se poner 2 juntas
+plot(-PC1, main="Primer componente principal", ylab="", xlab="")
+plot(dlog.ipc, main="IPC.USA", ylab="", xlab="")
+
+```
+
+```{r}
+#estimo VAR con componente
+cbind(PC1,)
+
+```
