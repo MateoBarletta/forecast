@@ -1,0 +1,323 @@
+---
+title: "Trabajo Final Modelos de Pronóstico"
+author: "Mateo Barletta - Diego Varela"
+date: "7/12/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+
+library(tidyverse)
+library(readxl)
+library(janitor)
+library(kableExtra)
+library(forecast)
+library(vars)
+
+theme_set(
+  theme_minimal() +
+    theme(legend.position = "right")
+  )
+
+cbp1 <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+```
+
+```{r}
+# Cargo toda la base y le limpio los nombres a las columnas
+df_forecast <- read_excel("C:/Users/Usuario/Desktop/Maestría DECON/Modelos de Pronóstico/forecast/data/forecast_DATA.xlsx") %>% 
+  clean_names()
+
+# Selecciono solo los datos de USA 
+df_usa <- df_forecast %>% 
+  dplyr::select(date, ends_with("us"), comprice)
+
+# Serie del ipc usa
+ipc_usa <- df_usa$cpiqus[c(-1,-191,-192,-193,-194)]
+ipc_usa <- ts(ipc_usa, start = c(1960,2), frequency = 4)
+
+# Serie del ipq usa
+ipq_usa <- df_usa$ipqus[c(-1,-191,-192,-193,-194)]
+ipq_usa <- ts(ipq_usa, start = c(1960,2), frequency = 4)
+
+# Serie de m3 usa
+m3_usa <- df_usa$m3qus[c(-1,-191,-192,-193,-194)]
+m3_usa <- ts(m3_usa, start = c(1960,2), frequency = 4)
+
+# Serie de commodities usa
+com <- df_usa$comprice [c(-1,-191,-192,-193,-194)]
+com <- ts(com, start = c(1960,2), frequency = 4)
+
+# Creo vector de vectores para las series en diferencias interanuales y le doy configurtacion de ts
+series_completas <- cbind(diff(log(ipc_usa), lag = 4),
+                          diff(log(ipq_usa), lag = 4),
+                          diff(log(com),     lag = 4),
+                          diff(log(m3_usa),  lag = 4))
+
+colnames(series_completas) <- c("dlog.ipc", "dlog.ipq","dlog.como","dlog.m2")
+
+# Partimos la muestra
+#in.sample: 2° trimestre 1960 - 4° trimestre 2000 (T=164)
+in.sample <- cbind(log(ipc_usa[2:164]), 
+                   log(ipq_usa[2:164]),
+                   log(com[2:164]),
+                   log(m3_usa[2:164]))
+in.sample <- ts(in.sample, start = c(1960,2), frequency = 4)
+
+#out.of.sample: 1° trimestre 2000 - 2° trimestre 2007 (T=164) en niveles
+out.of.sample <- cbind(log(ipc_usa[161:190]), 
+                       log(ipq_usa[161:190]),
+                       log(com[161:190]),
+                       log(m3_usa[161:190]))
+out.of.sample <- ts(out.of.sample, start = c(2000,1), frequency = 4)
+
+# Diferencio la serie in sample
+din.sample <- diff(in.sample, lag = 4)
+
+# Diferencio la serie out of sample
+test.dlog.ipc <- diff(out.of.sample, lag = 4)[,1]
+
+# Traigo todos los IPC
+lista <- c("cpiqus","cpiqca","cpiquk","cpiqjp","cpiqde","cpiqfr","cpiqit",
+           "cpiqat","cpiqbe","cpiqdk","cpiqfi","cpiqgr","cpiqie","cpiqlu",
+           "cpiqpt","cpiqes","cpiqse","cpiqnl","cpiqau","cpiqnz","cpiqno","cpiqch")
+
+#Selecciono IPC de cada país
+infla_total <- df_forecast %>% 
+  dplyr::select(one_of(lista))
+
+#Transformo a ts
+infla_total <- ts(infla_total, start = c(1961,1), frequency = 4)
+infla_total <- diff(log(infla_total), lag=4)
+
+# Me quedo con las mismas observaciones que las series completas
+infla_total <- tail(infla_total, -1)
+infla_total <- head(infla_total, -4)
+
+#Calculo componentes principales
+fit.pr <- prcomp(infla_total, scale =TRUE)
+
+# Calculo proporcion de la varianza total explicada por cada componente
+prop_varianza <- fit.pr$sdev^2 / sum(fit.pr$sdev^2)
+
+# Elijo el primer componente que explica casi el 75% de la varianza
+PC1 <- fit.pr$x[,1]
+PC1 <- ts(PC1, start = c(1961,2), frequency = 4)
+
+# Junto series y primer componente 
+series_favar <- cbind(series_completas, PC1)
+colnames(series_favar) <- c("dlog.ipc", "dlog.ipq","dlog.como","dlog.m2", "PC1")
+```
+
+
+## Motivación
+
+En el presente trabajo se propone predecir de la forma más precisa posible la inflación de Estados Unidos aplicando distintos métodos vistos en el curso. En particular, se utilizan un modelo univariado ARIMA, y modelos multivariados VAR, FAVAR y adicionalmente un modelo FAR.  
+
+Se cuenta con la base de datos utilizada en el paper “Global Inflation” de Matteo Ciccarelli y Benoît Mojon. Esta base está conformada con información para 22 países sobre tres variables: el Indice de precios al consumidor (IPC), un Indice de producción industrial (IP) y la cantidad nominal de dinero (M3). Adicionalmente, cuenta con un indice de precios internacionales de commodities. 
+
+Los datos son trimestrales y son del período comprendido entre 1960Q1 a 2008Q2, es decir 194 observaciones.  
+
+Si bien hay datos de inflación para una gran cantidad de países solo se elige el de USA para acotar el alcance del trabajo. No obstante, no significa que las demás series no son utilizadas, como se verá más adelante las series para otros países son tomadas en cuenta para la estimación de componentes principales.  
+
+Cabe aclarar que solo a efectos de entender la información que se maneja y extraer alguna idea se analizó el paper, pero no se tiene como fin replicarlo.
+
+## Procedimiento
+
+Para trabajar con datos de inflación y la estimación de los modelos se hicieron una transformación de la base de datos. En concreto, se aplica logaritmo a las variables y se realiza la cuarta diferencia, esto último con el fin de trabajar con la inflación interanual siguiendo el paper de referencia. En algún caso particular se quitaron valores ya que el dataset no estaba completo para toda las series.
+
+En una primera instancia se estima un modelo univariante, es decir, utilizando solo la información de la propia variable de interés y sus rezagos. Se procede a analizar de forma independiente la serie de inflación de Estados Unidos aplicando un método de selección de modelos ARIMA.
+
+En segundo lugar, se procede a estimar un modelo VAR con todas las series que conforman la base: IPC, M3, IP y precios de commodities. Se entiende que hay una relación económica entre las variables, aunque no se ahonda en el presente trabajo en aspectos teóricos sobre la relación causal entre las mismas. Para este caso, se toman como referencia lo visto en el tercer módulo del curso.
+
+En tercer lugar, incorporamos la información de la inflación en los 22 países de la muestra y se realiza el cálculo de los componentes principales. Se estima un modelo FAVAR con el factor principal hallado y se toma como referencia lo visto en el cuarto módulo del curso. 
+
+Adicionalmente, siguiendo el paper de referencia estimamos un modelo FAR, es decir un modelo autorregresivo de orden 1 con el primer factor calculado a través de los componentes principales.
+
+Por último, para los modelos estimados se realizan comparaciones entre distintas medidas de precisión para poder determinar cual es el modelo que pronostica mejor la variable de interés. Asimismo, se realizan tests de Diebold-Mariano para comprobar si la diferencia entre los errores de pronósticos es estadísticamente significativa.
+
+Cabe aclarar que los pronósticos y evaluaciones realizadas se hacen para la predicción un período hacia adelante para acotar el alcance del trabajo. Aunque se entiende que los resultados pueden variar según el horizonte de pronóstico a considerar.
+
+## Resultados
+
+### IPC con modelos univariados
+A modo introductorio se presenta a continuación la gráfica de la variable de interés medida en en diferencias interanuales logarítmicas, que es entendida como la inflación interanual:
+
+```{r}
+infla_usa <- diff(log(ipc_usa), lag = 4)
+plot.ts(infla_usa, main = "Inflación interanual de Estados Unidos", xlab="Período", ylab="Inflación")
+```
+
+Tal como se observa, el comportamiento de la inflación varía a lo largo del período. Se visualiza una aceleración desde el año 1973 a 1982 explicado por los shocks petroleros de la época, para luego tener un desempeño mas estable. 
+
+Para intentar modelizar la serie se parte el dataset en un subset de entrenamiento (las primeras 160 observaciones) y otro de testeo (las últimas 25 observaciones). El primer modelo a estimar es un ARIMA. Se busca la especificación del ARIMA que minimice un criterio de información:
+
+```{r}
+train <- window(infla_usa, end = c(2000,4))
+test  <- window(infla_usa, start = c(2001,1))
+
+fit.arima.diff <- auto.arima(train, seasonal = FALSE)
+fit.arima.diff
+```
+
+El modelo adecuado es un ARIMA(4,1,0) según el comando auto.arima utilizado.  No obstante, cabe hacer un par de apreciaciones sobre los resultados. 
+
+En primer lugar, se chequearon los residuos y se detecta el problema de autocorrelación. Esto sugiere problemas de especificación, pero se continua adelante a efectos de pronosticar. 
+
+En segundo lugar, se restringió la estimación sin utilizar la parte estacional porque se entiende que no se debe aplicar ya que la diferenciación interanual debe corregir la estacionalidad. Por otro lado, analizando económicamente la segunda diferenciación no corresponde, ya que bajo ese escenario la inflación debería ser explosiva, situación que no se da en absoluto en ningún país, más allá de algún ejemplo histórico en períodos cortos de tiempo.
+
+Se realiza el pronóstico móvil para un período adelante, para el período fuera de la muestra. Se muestra a continuación los pronósticos realizados y se comparan con la serie orignal:
+
+```{r}
+fcst.arima <- matrix(0, nrow = 25, ncol = 1)  
+fcst.arima <- ts(fcst.arima, start=c(2001,1), frequency = 4)
+
+for(i in 1:25){
+  train <- window(infla_usa, end = 2001 + (i-1)/4)
+  arima <- auto.arima(train, seasonal = FALSE)
+  fcst.arima[i,] <- forecast(arima, h=1)$mean
+}
+
+par(mfrow=c(1,2), oma=c(0.5,0.5,0.5,0.5), mar=c(2,2,2,2))
+plot(test.dlog.ipc, main="Inflación USA", xlab = "Período", ylab = "IPC USA", ylim=c(0, 0.040))
+plot(fcst.arima, col = "grey", lwd = 2, main="Forecast ARIMA", xlab = "Período", ylab = "IPC USA", ylim=c(0, 0.040))
+```
+
+
+### Modelo VAR
+
+Los modelos autorregresivos (VAR) pueden describirse como aquellos en los que una variable o conjunto de variables se explican, al menos en parte, en función de los valores pasados de esa misma variable o conjunto de variables. 
+
+Los VAR no son generalmente utilizados para tener una interpretación causal, sino para realizar pronósticos de las variables de interés o generar simulaciones. Se pueden llevar a cabo test de causalidad de Granger, funciones impulso respuesta y descomposición de varianza. A efectos del trabajo solo se estima para generar pronósticos.
+
+De acuerdo con los criterios de ajuste se sugiere seleccionar distintos rezagos. No obstante, para los distintos modelos elegidos no se lograba cumplir con los supuestos de normalidad y no autocorrelación. Esto sugeriría problemas de especificación con las variables consideradas pero este problema se ignora, a pesar de no ser lo adecuado, con el fin de pronosticar.  Se elige estimar un modelo VAR con 6 rezagos:
+
+```{r}
+VARselect(series_completas, type = "const")$selection
+var <- VAR(series_completas, lag.max = 6, type = "const")
+```
+
+A continuación, se visualiza los valores de inflación pronosticados y la serie original:
+
+```{r}
+fcst.var <- matrix(0, nrow = 25, ncol = 1)  
+fcst.var <- ts(fcst.var, start=c(2001,1), frequency = 4)
+
+for(i in 1:25){
+  train <- window(series_completas, end = 2001 + (i-1)/4)
+  var <- VAR(train, p = 6, type = "const")
+  fcst.var[i,] <- forecast(var, h=1)$forecast$dlog.ipc$mean
+}
+
+par(mfrow=c(1,2), oma=c(0.5,0.5,0.5,0.5), mar=c(2,2,2,2))
+plot(test.dlog.ipc , main="Inflación USA", xlab = "Período", ylab = "IPC USA", ylim=c(0, 0.040))
+plot(fcst.var, col = "blue", lwd = 2, main="Forecast VAR(6)", xlab = "Período", ylab = "IPC USA", ylim=c(0, 0.040))
+```
+
+### Modelo FAVAR
+
+Un modelo FAVAR es un modelo VAR que se le adicionan variables (factores) que resumen el comportamiento de muchas series.
+
+A través del análisis de componentes principales se extraen aquellos factores que resumen la estructura subyacente de las 22 series de inflación de la base de datos.
+
+La hipótesis tratada en el trabajo de referencia es que la inflación global ayuda a pronosticar la inflación de cada país. 
+
+A continuación, se grafica la proporción de la varianza explicada por cada componente principal:
+
+```{r}
+ggplot(data = data.frame(prop_varianza, pc = 1:22),
+       aes(x = pc, y = prop_varianza)) +
+  geom_col(width = 0.3) +
+  scale_y_continuous(limits = c(0,1)) +
+  theme_bw() +
+  labs(x = "Componente principal",
+       y = "Prop. de varianza explicada")
+```
+
+Como se puede observar el primer componente principal explica la mayoría de la varianza del conjunto de series considerado. 
+
+Complementariamente, se presenta la evolución del primer componente principal, esto puede ser interpretado como un aproximación a la inflación mundial. 
+
+```{r}
+plot(PC1, main="Primer componente principal",  xlab="Período", ylab="Inflación interanual")
+```
+
+Notar que al realizar la comparación de los resultados del primer componente principal hallado con el del paper se observan que las gráficas coinciden, aunque el factor está expresado en otra escala.
+
+Al igual que el modelo VAR calculado previamente, según los criterios de ajuste se sugiere seleccionar distintos rezagos. No obstante, de forma similar para los distintos modelos elegidos no se lograba cumplir con los supuestos de normalidad y no autocorrelación. Por tal razón, se elige el modelo VAR más parsimonioso con 2 rezagos.
+
+```{r}
+VARselect(series_favar, type = "const")$selection
+```
+
+A continuación, se presentan los valores de inflación pronosticados y la serie original:
+
+```{r}
+# Armo forecast para h=1 rolling out of sample
+fcst.favar <- matrix(0, nrow = 25, ncol = 1)  
+fcst.favar <- ts(fcst.favar, start=c(2001,1), frequency = 4)
+
+for(i in 1:25){
+  train <- window(series_favar, end = 2001 + (i-1)/4)
+  favar <- VAR(train, p = 2, type = "const")
+  fcst.favar[i,] <- forecast(favar, h=1)$forecast$dlog.ipc$mean
+}
+
+par(mfrow=c(1,2), oma=c(0.5,0.5,0.5,0.5), mar=c(2,2,2,2))
+plot(test.dlog.ipc, main="Inflacion USA", xlab = "Período", ylab = "IPC USA", ylim=c(0, 0.045))
+plot(fcst.favar, col = "red", lwd = 2, main="Forecast FAVAR(2)", xlab = "Período", ylab = "IPC USA", ylim=c(0, 0.045))
+```
+
+### Modelo FAR
+En última instancia, siguiendo el paper de referencia estimamos un modelo FAR, es decir un modelo autorregresivo de orden 1 con el primer factor calculado a través de los componentes principales.
+
+```{r}
+fit.far <- lm(data=series_favar, dlog.ipc ~ lag(dlog.ipc) + PC1)
+fit.far
+```
+
+Se realizan los pronósticos utilizando el modelo obtenido y se comparan con la serie original:
+
+```{r}
+fcst.far <- matrix(0, nrow = 25, ncol = 1)  
+fcst.far <- ts(fcst.far, start=c(2001,1), frequency = 4)
+
+for(i in 1:25){
+  train <- window(series_favar, end = 2001 + (i-1)/4)
+  far <- lm(data=train, dlog.ipc ~ lag(dlog.ipc) + PC1)
+  fcst.far[i,] <- far$coefficients[1]+far$coefficients[2]*train[nrow(train)-1,"dlog.ipc"]+far$coefficients[3]*train[nrow(train),"PC1"]
+}
+
+par(mfrow=c(1,2), oma=c(0.5,0.5,0.5,0.5), mar=c(2,2,2,2))
+plot(test.dlog.ipc, main="Inflacion USA", xlab = "Período", ylab = "IPC USA", ylim=c(0, 0.045))
+plot(fcst.far, col = "green", lwd = 2, main="Forecast FAR(1)", xlab = "Período", ylab = "IPC USA", ylim=c(0, 0.045))
+```
+
+
+## Comparación de modelos
+
+Para los modelos estimados se realizan comparaciones entre distintas medidas de precisión con el objetivo de determinar cuál es el modelo que pronostica mejor la variable de interés.  
+
+En la tabla siguiente se observan los valores para los distintos criterios, junto con los resultados de los test de DM, realizando la comparación entre los modelos tomando como base el modelo ARIMA.
+
+```{r}
+ac_arima <- accuracy(fcst.arima, test.dlog.ipc)
+ac_var   <- accuracy(fcst.var, test.dlog.ipc)
+ac_favar <- accuracy(fcst.favar, test.dlog.ipc)
+ac_far   <- accuracy(fcst.far, test.dlog.ipc)
+
+tabla_accuracy <- rbind(ac_arima, ac_var, ac_favar, ac_far)
+rownames(tabla_accuracy) <- c("ARIMA", "VAR", "FAVAR", "FAR")
+tabla_accuracy <- tabla_accuracy[,c(2,3,5)]
+
+tabla_accuracy 
+```
+
+Tal como se observa, de acuerdo a todas las medidas de precisión consideradas el modelo que ajusta mejor es el ARIMA. Esto puede deberse a que la especificación del modelo varía en cada etapa del pronóstico, mientras que el resto de los modelos siempre son estimados con la misma forma funcional. El modelo que peor performa es el modelo VAR.
+
+Para el modelo ARIMA se realizó el test de Diebold-Mariano para contrastar si la diferencia en los errores de pronóstico con los distintos modelos era significativa, rechazando esta hipótesis en todos los casos, por lo que la mejora observada no es significativa.
+
+Como fue señalado previamente el presente trabajo se limitó a realizar pronósticos solo un período hacia adelante pero los resultados pueden diferir según el horizonte de tiempo a elegir.  Asimismo, se podría evaluar los modelos cambiando la especificación de los mismos (más allá del caso ARIMA). Es decir, reeligiendo el modelo óptimo en cada etapa del pronóstico o inclusive, realizando un esquema rolling a la hora de estimar, aunque no se esperan cambios significativos con este procedimiento.
+
+El trabajo es totalmente perfectible y si se toma en cuenta todas estas consideraciones las conclusiones pueden diferir, pero se logra abarcar en primera instancia tres de los módulos del curso y se aplican en gran medida lo transmitido, realizando pronósticos sobre una variable de gran interés, como es la inflación de Estados Unidos, y obteniendo resultados dentro del rango esperado.

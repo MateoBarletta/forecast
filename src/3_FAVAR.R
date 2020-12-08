@@ -135,7 +135,7 @@ fcst.far <- ts(fcst.far, start=c(2001,1), frequency = 4)
 for(i in 1:25){
   train <- window(series_favar, end = 2001 + (i-1)/4)
   far <- lm(data=train, dlog.ipc ~ lag(dlog.ipc) + PC1)
-  fcst.far[i,] <- far$coefficients[1]+far$coefficients[2]*train[nrow(train),"dlog.ipc"]+far$coefficients[3]*train[nrow(train),"PC1"]
+  fcst.far[i,] <- far$coefficients[1]+far$coefficients[2]*train[nrow(train)-1,"dlog.ipc"]+far$coefficients[3]*train[nrow(train),"PC1"]
 }
 
 par(mfrow=c(1,2), oma=c(0.5,0.5,0.5,0.5), mar=c(2,2,2,2))

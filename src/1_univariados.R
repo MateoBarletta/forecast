@@ -48,17 +48,22 @@ accuracy(fcst.ets$mean, test)
 
 # Ahora voy a estimar un ARIMA para la serie en diferencias
 infla_usa <- diff(log(ipc_usa), lag = 4)
+plot.ts(infla_usa, main = "Inflación interanual de Estados Unidos", xlab="Período", ylab="Inflación")
 
 # DF `de prueba y entrenamiento`
 train <- window(infla_usa, end = c(2000,4))
 test  <- window(infla_usa, start = c(2001,1))
 
 #Estimamos un ARIMA
-fit.arima.diff <- auto.arima(train)
+fit.arima.diff <- auto.arima(train, seasonal = FALSE)
 summary(fit.arima.diff)
 checkresiduals(fit.arima.diff)
 
-#Generamos los pronósticos rolling para h=1:
+res <- residuals(fit.arima.diff)
+Box.test(res, lag=12, fitdf=3, type="Box-Pierce")
+Box.test(res, lag=12, fitdf=3, type="Ljung-Box")
+
+#Generamos los pronósticos para h=1:
 fcst.arima <- matrix(0, nrow = 25, ncol = 1)  
 fcst.arima <- ts(fcst.arima, start=c(2001,1), frequency = 4)
 

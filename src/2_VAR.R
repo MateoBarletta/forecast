@@ -50,7 +50,7 @@ ggplot(df_usa_long, aes(x=date, y=valor, color=indice))+
 VARselect(series_completas, type = "const") 
 
 # Estimo modelo
-var <- VAR(series_completas, lag.max = 9, type = "const")
+var <- VAR(series_completas, lag.max = 6, type = "const")
 # Test multivariado (de tipo Portmanteau) de autocorrelación
 serial.test(var, lags.pt = 13) # Rechazo H0, hay autocorrelacion en los errores
 # Test de Jarque-Bera de normalidad en los errores
